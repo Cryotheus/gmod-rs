@@ -123,19 +123,10 @@ pub struct LuaDebug {
 	pub i_ci: i32
 }
 
-#[inline(always)]
-/// Loads lua_shared and imports all functions. This is already done for you if you add `#[gmod::gmod13_open]` to your `gmod13_open` function.
-pub unsafe fn load() {
-	import::LUA_SHARED.load()
-}
-
 thread_local! {
-	#[cfg(debug_assertions)]
 	static LUA: Cell<Option<State>> = Cell::new(None);
-
-	#[cfg(not(debug_assertions))]
-	static LUA: Cell<State> = Cell::new(State(std::ptr::null_mut()));
 }
+
 /// Acquires a pointer to the Lua state for the current thread.
 ///
 /// This will panic if called from anywhere but the main thread. This will panic if you are not using the `#[gmod13_open]` macro to open the Lua state.
@@ -147,7 +138,7 @@ pub unsafe fn state() -> State {
 			cell.get().expect("The Lua state cannot be found in this thread. Perhaps you are calling this function from a thread other than the main thread? Perhaps you forgot to use the `#[gmod13_open]` macro?")
 		}
 		#[cfg(not(debug_assertions))] {
-			cell.get()
+			unsafe { cell.get().unwrap_unchecked() }
 		}
 	})
 }
@@ -156,10 +147,6 @@ pub unsafe fn state() -> State {
 #[allow(non_snake_case)]
 pub fn __set_state__internal(state: State) {
 	LUA.with(|cell| {
-		#[cfg(debug_assertions)]
 		cell.set(Some(state));
-
-		#[cfg(not(debug_assertions))]
-		cell.set(state);
 	})
 }
