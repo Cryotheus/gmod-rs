@@ -40,6 +40,8 @@ impl State {
 	///
 	/// Note, this may be a somewhat expensive operation, so storing its result in some way is recommended.
 	pub unsafe fn raw_bind<F: CLuaFunction>(&self, symbol: &[u8]) -> Result<F, libloading::Error> {
-		LUA_SHARED.library.get::<F>(symbol).map(|f| *f)
+		with_lua_shared(|lua_shared| {
+			lua_shared.library.get::<F>(symbol).map(|f| *f)
+		})
 	}
 }

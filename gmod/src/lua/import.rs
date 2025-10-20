@@ -1,7 +1,10 @@
 #[cfg(debug_assertions)]
-use std::sync::atomic::AtomicI64;
+use std::{sync::Mutex, thread::ThreadId, cell::RefCell};
 
-use std::{cell::UnsafeCell, ffi::c_void};
+#[cfg(not(debug_assertions))]
+use std::{mem::MaybeUninit, cell::UnsafeCell};
+
+use std::ffi::c_void;
 
 use libloading::{Library, Symbol};
 
@@ -67,51 +70,39 @@ impl LuaError {
 	}
 }
 
-#[cfg_attr(not(debug_assertions), repr(transparent))]
-pub struct LuaSharedInterface(pub(crate) UnsafeCell<*mut LuaShared>, #[cfg(debug_assertions)] AtomicI64);
-impl LuaSharedInterface {
-	#[cfg(debug_assertions)]
-	pub(crate) fn debug_assertions(&self) {
-		assert!(!unsafe { *self.0.get() }.is_null(), "The Lua state has not been initialized yet. Add `#[gmod::gmod13_open]` to your module's gmod13_open function to fix this. You can also manually set the Lua state with `gmod::set_lua_state(*mut c_void)`");
+#[cfg(not(debug_assertions))]
+static mut LUA_SHARED: UnsafeCell<MaybeUninit<LuaShared>> = UnsafeCell::new(MaybeUninit::uninit());
 
-		let thread_id = u64::from(std::thread::current().id().as_u64()) as i64;
-		match self.1.compare_exchange(-1, thread_id, std::sync::atomic::Ordering::SeqCst, std::sync::atomic::Ordering::SeqCst) {
-			Ok(-1) => {}, // This is the first thread to use this Lua state.
-			Ok(_) => unreachable!(),
-			Err(remembered_thread_id) => assert_eq!(thread_id, remembered_thread_id, "Tried to access the Lua state from another thread! The Lua state is NOT thread-safe, and should only be accessed from the main thread.")
-		}
-	}
-
-	pub(super) unsafe fn load(&self) {
-		*self.0.get() = Box::leak(Box::new(LuaShared::import()));
-	}
-
-	pub(super) unsafe fn set(&self, ptr: *mut c_void) {
-		*self.0.get() = ptr as *mut LuaShared;
-	}
+#[cfg(debug_assertions)]
+thread_local! {
+	static LUA_SHARED: RefCell<Option<LuaShared>> = const { RefCell::new(None) };
 }
-impl std::ops::Deref for LuaSharedInterface {
-	type Target = LuaShared;
 
-	#[inline]
-	fn deref(&self) -> &Self::Target {
-		#[cfg(debug_assertions)]
-		self.debug_assertions();
-
-		unsafe { &**self.0.get() }
+#[allow(static_mut_refs)]
+pub unsafe fn load() {
+	#[cfg(debug_assertions)] {
+		LUA_SHARED.set(Some(LuaShared::import()));
 	}
-}
-impl std::ops::DerefMut for LuaSharedInterface {
-	#[inline]
-	fn deref_mut(&mut self) -> &mut Self::Target {
-		#[cfg(debug_assertions)]
-		self.debug_assertions();
-
-		unsafe { &mut **self.0.get_mut() }
+	#[cfg(not(debug_assertions))] {
+		(*LUA_SHARED.get()).as_mut_ptr().write(LuaShared::import());
 	}
 }
 
-pub static mut LUA_SHARED: LuaSharedInterface = LuaSharedInterface(UnsafeCell::new(std::ptr::null_mut()), #[cfg(debug_assertions)] AtomicI64::new(-1));
+#[cfg_attr(not(debug_assertions), inline(always))]
+#[allow(static_mut_refs)]
+pub unsafe fn with_lua_shared<F, T>(op: F) -> T where F: FnOnce(&LuaShared) -> T {
+	#[cfg(debug_assertions)] {
+		LUA_SHARED.with_borrow(|lua_shared| {
+			op(
+				lua_shared.as_ref()
+					.expect("The Lua state has not been initialized yet. Add `#[gmod::gmod13_open]` to your module's gmod13_open function to fix this. You can also manually set the Lua state with `gmod::set_lua_state(*mut c_void)`")
+			)
+		})
+	}
+	#[cfg(not(debug_assertions))] {
+		unsafe { op((*LUA_SHARED.get()).assume_init_ref()) }
+	}
+}
 
 pub struct LuaShared {
 	pub(crate) library: &'static libloading::Library,
@@ -178,7 +169,7 @@ pub struct LuaShared {
 }
 unsafe impl Sync for LuaShared {}
 impl LuaShared {
-	fn import() -> Self {
+	pub(crate) fn import() -> Self {
 		unsafe {
 			let (library, path) = Self::find_lua_shared();
 			let library = Box::leak(Box::new(library));

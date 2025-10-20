@@ -3,8 +3,6 @@
 #![allow(clippy::missing_safety_doc)]
 #![allow(clippy::result_unit_err)]
 
-#![feature(thread_id_value)]
-
 #![cfg_attr(feature = "gmcl", feature(internal_output_capture))]
 
 #[cfg(not(all(any(target_os = "windows", target_os = "linux", target_os = "macos"), any(target_pointer_width = "32", target_pointer_width = "64"))))]
